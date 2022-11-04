@@ -16,7 +16,8 @@ static uint32_t motor1_dmabuffer[DSHOT_DMA_BUFFER_SIZE];
 static uint32_t motor2_dmabuffer[DSHOT_DMA_BUFFER_SIZE];
 static uint32_t motor3_dmabuffer[DSHOT_DMA_BUFFER_SIZE];
 static uint32_t motor4_dmabuffer[DSHOT_DMA_BUFFER_SIZE];
-
+static uint8_t dshot_state = 0;
+static uint8_t dshot_ready = 1;
 
 /* Static functions */
 // dshot init
@@ -27,9 +28,9 @@ static void dshot_put_tc_callback_function();
 static void dshot_start_pwm();
 
 // dshot write
-static uint16_t dshot_prepare_packet(uint16_t value);
-static void dshot_prepare_dmabuffer(uint32_t* motor_dmabuffer, uint16_t value);
-static void dshot_prepare_dmabuffer_all();
+static uint16_t dshot_prepare_packet(uint16_t value, uint8_t telemetry);
+static void dshot_prepare_dmabuffer(uint32_t* motor_dmabuffer, uint16_t value, uint8_t telemetry);
+static void dshot_prepare_dmabuffer_all(uint16_t* motor_value, uint8_t * telemetry);
 static void dshot_dma_start();
 static void dshot_enable_dma_request();
 
@@ -42,19 +43,25 @@ void dshot_init(dshot_type_e dshot_type)
 	dshot_start_pwm();
 }
 
-void dshot_write(uint16_t* motor_value)
+void dshot_write(uint16_t* motor_value, uint8_t * telemetry)
 {
-	dshot_prepare_dmabuffer_all(motor_value);
+	dshot_state = 0;
+	dshot_ready = 0;
+	dshot_prepare_dmabuffer_all(motor_value, telemetry);
 	dshot_dma_start();
 	dshot_enable_dma_request();
+}
+
+uint8_t dshotReady()
+{
+	return dshot_ready;
 }
 
 
 /* Static functions */
 static uint32_t dshot_choose_type(dshot_type_e dshot_type)
 {
-	switch (dshot_type)
-	{
+	switch (dshot_type) {
 		case(DSHOT600):
 				return DSHOT600_HZ;
 
@@ -73,23 +80,23 @@ static void dshot_set_timer(dshot_type_e dshot_type)
 	uint32_t timer_clock = TIMER_CLOCK; // all timer clock is same as SystemCoreClock in stm32f411
 
 	// Calculate prescaler by dshot type
-	dshot_prescaler = lrintf((float) timer_clock / dshot_choose_type(dshot_type) + 0.01f) - 1;
+	dshot_prescaler = lrintf((float) timer_clock / dshot_choose_type(dshot_type)) - 1;
 
 	// motor1
 	__HAL_TIM_SET_PRESCALER(MOTOR_1_TIM, dshot_prescaler);
-	__HAL_TIM_SET_AUTORELOAD(MOTOR_1_TIM, MOTOR_BITLENGTH);
+	__HAL_TIM_SET_AUTORELOAD(MOTOR_1_TIM, (MOTOR_BITLENGTH - 1));
 
 	// motor2
 	__HAL_TIM_SET_PRESCALER(MOTOR_2_TIM, dshot_prescaler);
-	__HAL_TIM_SET_AUTORELOAD(MOTOR_2_TIM, MOTOR_BITLENGTH);
+	__HAL_TIM_SET_AUTORELOAD(MOTOR_2_TIM, (MOTOR_BITLENGTH - 1));
 
 	// motor3
 	__HAL_TIM_SET_PRESCALER(MOTOR_3_TIM, dshot_prescaler);
-	__HAL_TIM_SET_AUTORELOAD(MOTOR_3_TIM, MOTOR_BITLENGTH);
+	__HAL_TIM_SET_AUTORELOAD(MOTOR_3_TIM, (MOTOR_BITLENGTH - 1));
 
 	// motor4
 	__HAL_TIM_SET_PRESCALER(MOTOR_4_TIM, dshot_prescaler);
-	__HAL_TIM_SET_AUTORELOAD(MOTOR_4_TIM, MOTOR_BITLENGTH);
+	__HAL_TIM_SET_AUTORELOAD(MOTOR_4_TIM, (MOTOR_BITLENGTH - 1));
 }
 
 // __HAL_TIM_DISABLE_DMA is needed to eliminate the delay between different dshot signals
@@ -98,22 +105,21 @@ static void dshot_dma_tc_callback(DMA_HandleTypeDef *hdma)
 {
 	TIM_HandleTypeDef *htim = (TIM_HandleTypeDef *)((DMA_HandleTypeDef *)hdma)->Parent;
 
-	if (hdma == htim->hdma[TIM_DMA_ID_CC1])
-	{
+	if (hdma == htim->hdma[TIM_DMA_ID_CC1]) {
 		__HAL_TIM_DISABLE_DMA(htim, TIM_DMA_CC1);
-	}
-	else if(hdma == htim->hdma[TIM_DMA_ID_CC2])
-	{
+		dshot_state |= 0x01;
+	} else if(hdma == htim->hdma[TIM_DMA_ID_CC2]) {
 		__HAL_TIM_DISABLE_DMA(htim, TIM_DMA_CC2);
-	}
-	else if(hdma == htim->hdma[TIM_DMA_ID_CC3])
-	{
+		dshot_state |= 0x02;
+	} else if(hdma == htim->hdma[TIM_DMA_ID_CC3]) {
 		__HAL_TIM_DISABLE_DMA(htim, TIM_DMA_CC3);
-	}
-	else if(hdma == htim->hdma[TIM_DMA_ID_CC4])
-	{
+		dshot_state |= 0x04;
+	} else if(hdma == htim->hdma[TIM_DMA_ID_CC4]) {
 		__HAL_TIM_DISABLE_DMA(htim, TIM_DMA_CC4);
+		dshot_state |= 0x08;
 	}
+
+	dshot_ready = (dshot_state & 0x0F) ? 1 : 0;
 }
 
 static void dshot_put_tc_callback_function()
@@ -135,19 +141,17 @@ static void dshot_start_pwm()
 	HAL_TIM_PWM_Start(MOTOR_4_TIM, MOTOR_4_TIM_CHANNEL);
 }
 
-static uint16_t dshot_prepare_packet(uint16_t value)
+static uint16_t dshot_prepare_packet(uint16_t value, uint8_t telemetry)
 {
 	uint16_t packet;
-	bool dshot_telemetry = false;
 
-	packet = (value << 1) | (dshot_telemetry ? 1 : 0);
+	packet = (value << 1) | (telemetry ? 1 : 0);
 
 	// compute checksum
 	unsigned csum = 0;
 	unsigned csum_data = packet;
 
-	for(int i = 0; i < 3; i++)
-	{
+	for(int i = 0; i < 3; i++) {
         csum ^=  csum_data; // xor data by nibbles
         csum_data >>= 4;
 	}
@@ -159,13 +163,12 @@ static uint16_t dshot_prepare_packet(uint16_t value)
 }
 
 // Convert 16 bits packet to 16 pwm signal
-static void dshot_prepare_dmabuffer(uint32_t* motor_dmabuffer, uint16_t value)
+static void dshot_prepare_dmabuffer(uint32_t* motor_dmabuffer, uint16_t value, uint8_t telemetry)
 {
 	uint16_t packet;
-	packet = dshot_prepare_packet(value);
+	packet = dshot_prepare_packet(value, telemetry);
 
-	for(int i = 0; i < 16; i++)
-	{
+	for(int i = 0; i < 16; i++) {
 		motor_dmabuffer[i] = (packet & 0x8000) ? MOTOR_BIT_1 : MOTOR_BIT_0;
 		packet <<= 1;
 	}
@@ -174,12 +177,17 @@ static void dshot_prepare_dmabuffer(uint32_t* motor_dmabuffer, uint16_t value)
 	motor_dmabuffer[17] = 0;
 }
 
-static void dshot_prepare_dmabuffer_all(uint16_t* motor_value)
+static void dshot_prepare_dmabuffer_all(uint16_t* motor_value, uint8_t * telemetry)
 {
-	dshot_prepare_dmabuffer(motor1_dmabuffer, motor_value[0]);
-	dshot_prepare_dmabuffer(motor2_dmabuffer, motor_value[1]);
-	dshot_prepare_dmabuffer(motor3_dmabuffer, motor_value[2]);
-	dshot_prepare_dmabuffer(motor4_dmabuffer, motor_value[3]);
+	dshot_prepare_dmabuffer(motor1_dmabuffer, motor_value[0], telemetry[0]);
+	dshot_prepare_dmabuffer(motor2_dmabuffer, motor_value[1], telemetry[1]);
+	dshot_prepare_dmabuffer(motor3_dmabuffer, motor_value[2], telemetry[2]);
+	dshot_prepare_dmabuffer(motor4_dmabuffer, motor_value[3], telemetry[3]);
+
+	telemetry[0] = 0;
+	telemetry[1] = 0;
+	telemetry[2] = 0;
+	telemetry[3] = 0;
 }
 
 static void dshot_dma_start()
