@@ -1,0 +1,99 @@
+#include "entity_types.h"
+#include "entity_manager.h"
+
+#define CURRENT_BOARD ((uint8_t) 0xXX)
+
+// entity commands ----------------------------------------------------
+#define ENTITY_COMMAND 				((uint8_t) 0xF0)
+#define READ_ENTITY_DESCRIPTIONS 	((uint8_t) 0x00)
+#define READ_ENTITY_FIELDS 			((uint8_t) 0x01)
+#define READ_FIELD_VALUE 			((uint8_t) 0x02)
+#define WRITE_FIELD_VALUE 			((uint8_t) 0x03)
+#define READ_SEVERAL_VALUE 			((uint8_t) 0x04)
+#define WRITE_SEVERAL_VALUE 		((uint8_t) 0x05)
+#define ENTITY_FLASH_OPERATION 		((uint8_t) 0x06)
+
+
+void EntityCMD(uint8_t *inputData, uint8_t *outputData, uint8_t *size, uint32_t time) {
+	if (inputData != NULL) {
+		uint16_t Wpos = 0;
+		uint16_t Rpos = 0;
+		uint16_t entitySize = 0;
+
+
+		uint8_t cmd = readU8(inputData, &Rpos, ENTITY_LSB);
+
+		writeU8(outputData, &Wpos, BOARD_ID, ENTITY_LSB);
+		writeU8(outputData, &Wpos, ENTITY_COMMAND, ENTITY_LSB);
+		writeU8(outputData, &Wpos, cmd, ENTITY_LSB);
+
+		switch(cmd) {
+
+		case READ_ENTITY_DESCRIPTIONS: {
+			uint16_t startEntityNo = readU16(inputData, &Rpos, ENTITY_LSB);
+			uint8_t len = readU8(inputData, &Rpos, ENTITY_LSB);
+			read_entities_descriptions(startEntityNo, len, (outputData + Wpos), &entitySize);
+			break;
+		}
+
+		case READ_ENTITY_FIELDS: {
+			uint16_t entityNo = readU16(inputData, &Rpos, ENTITY_LSB);
+			uint8_t startFieldNo = readU8(inputData, &Rpos, ENTITY_LSB);
+			uint16_t len = readU8(inputData, &Rpos, ENTITY_LSB);
+
+			read_entity_fields(entityNo, startFieldNo, len, (outputData + Wpos), &entitySize);
+			break;
+		}
+
+		case READ_FIELD_VALUE: {
+			uint16_t entityNo = readU16(inputData, &Rpos, ENTITY_LSB);
+			uint8_t FieldNo = readU8(inputData, &Rpos, ENTITY_LSB);
+
+			read_field_value(entityNo, FieldNo, (outputData + Wpos), &entitySize);
+			break;
+		}
+
+		case WRITE_FIELD_VALUE: {
+			uint16_t entityNo = readU16(inputData, &Rpos, ENTITY_LSB);
+			uint8_t fieldNo = readU8(inputData, &Rpos, ENTITY_LSB);
+
+			set_field_value(entityNo, fieldNo, (inputData + Rpos));
+			break;
+		}
+
+		case READ_SEVERAL_VALUE:
+			entitySize = (*size - 1);
+			read_several_fields_values((inputData + Rpos), (outputData + Wpos), &entitySize);
+			break;
+
+		case WRITE_SEVERAL_VALUE:
+			entitySize = (*size - 1);
+			set_several_fields_values((inputData + Rpos), (outputData + Wpos), &entitySize);
+			break;
+
+//		case ENTITY_FLASH_OPERATION:
+//			/*	 if uncommit USE_ENTITY_FLASH, and redefine parameters in entity_flash_writer.h
+//			*    	#define EEPROM_OBJ_TYPE void
+//			*		#define EEPROM_READ(obj, addr, data_ptr, size)
+//			*		#define EEPROM_WRITE_BYTE(obj, addr, byte_data)
+//			*		#define EEPROM_WRITE(obj, addr, data_ptr, size)
+//			*/
+//			entitySize = (*size - 1);
+//			set_several_bit_flags((inputData + Rpos), (outputData + Wpos), &entitySize, &memory);
+//			break;
+
+		}
+		*size = (uint8_t) Wpos + entitySize;
+	}
+}
+
+#undef CURRENT_BOARD
+
+#undef ENTITY_COMMAND
+#undef READ_ENTITY_DESCRIPTIONS
+#undef READ_ENTITY_FIELDS
+#undef READ_FIELD_VALUE
+#undef WRITE_FIELD_VALUE
+#undef READ_SEVERAL_VALUE
+#undef WRITE_SEVERAL_VALUE
+#undef ENTITY_FLASH_OPERATION
